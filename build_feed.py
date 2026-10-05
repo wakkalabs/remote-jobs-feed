@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Build a filtered RSS + JSON Feed of fully remote, US-eligible senior platform roles.
 
-Sources: We Work Remotely (RSS), Remote OK (JSON API), Himalayas (JSON API),
-HN "Who is hiring?" (Algolia API). Stdlib only (Python 3.11+).
+Sources: We Work Remotely, RemoteFirstJobs, WorkAnywhere, Remotive, Himalayas
+(RSS/Atom), Remote OK and Jobicy (JSON APIs), HN "Who is hiring?" (Algolia API).
+Stdlib only (Python 3.11+).
 
 Usage:  python build_feed.py [--config config.toml] [--out public] [--explain]
 """
@@ -85,6 +86,21 @@ def from_rfc822(s: str) -> datetime:
         return datetime.now(UTC)
 
 
+def from_feed_date(value: str) -> datetime:
+    """Parse common RSS/Atom date formats; invalid dates sort as stale, not fresh."""
+    if not value:
+        return datetime.min.replace(tzinfo=UTC)
+    try:
+        parsed = parsedate_to_datetime(value)
+        return parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed.astimezone(UTC)
+    except (TypeError, ValueError, OverflowError, IndexError):
+        try:
+            parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+            return parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed.astimezone(UTC)
+        except (TypeError, ValueError, OverflowError):
+            return datetime.min.replace(tzinfo=UTC)
+
+
 def from_epoch(v) -> datetime:
     try:
         return datetime.fromtimestamp(int(v), UTC)
@@ -94,10 +110,139 @@ def from_epoch(v) -> datetime:
 
 def as_int(v) -> int | None:
     try:
-        v = int(float(v))
-        return v if v > 0 else None
-    except (TypeError, ValueError):
+        if isinstance(v, str):
+            match = re.search(r"\d[\d,]*(?:\.\d+)?", v)
+            if not match:
+                return None
+            v = match.group(0).replace(",", "")
+        value = int(float(v))
+        return value if value > 0 else None
+    except (TypeError, ValueError, OverflowError):
         return None
+
+
+def _local_name(element: ET.Element) -> str:
+    return element.tag.rsplit("}", 1)[-1].lower()
+
+
+def _child_text(element: ET.Element, *names: str) -> str:
+    wanted = {name.lower() for name in names}
+    for child in element.iter():
+        if child is element or _local_name(child) not in wanted:
+            continue
+        value = "".join(child.itertext()).strip()
+        if value:
+            return value
+    return ""
+
+
+def _feed_link(entry: ET.Element) -> str:
+    for child in entry:
+        if _local_name(child) == "link":
+            link = child.attrib.get("href") or (child.text or "").strip()
+            if link and child.attrib.get("rel", "alternate") in ("alternate", ""):
+                return link
+    return _child_text(entry, "link")
+
+
+def _split_feed_title(title: str, entry: ET.Element) -> tuple[str, str]:
+    author = _child_text(entry, "name").strip()
+    if author:
+        for separator in (" at ", " - ", " | "):
+            if separator in title:
+                left, right = title.rsplit(separator, 1)
+                if right.strip().casefold() == author.casefold():
+                    return left.strip(), author
+        return title.strip(), author
+    if ": " in title:
+        company, clean_title = title.split(": ", 1)
+        if company.strip() and clean_title.strip():
+            return clean_title.strip(), company.strip()
+    for separator in (" at ", " - ", " | "):
+        if separator in title:
+            clean_title, company = title.rsplit(separator, 1)
+            if clean_title.strip() and company.strip():
+                return clean_title.strip(), company.strip()
+    return title.strip(), ""
+
+
+def parse_rss_atom(payload: bytes, source: str) -> list[Job]:
+    """Normalize RSS 2.0 and Atom entries; malformed or unlinked entries are skipped."""
+    parser = ET.XMLParser()
+    root = ET.fromstring(payload, parser=parser)
+    entries = [element for element in root.iter() if _local_name(element) in ("item", "entry")]
+    jobs = []
+    for entry in entries:
+        title, url = _child_text(entry, "title"), _feed_link(entry)
+        if not title or not url:
+            continue
+        clean_title, company = _split_feed_title(to_text(title), entry)
+        identifier = _child_text(entry, "guid", "id") or url
+        published = _child_text(entry, "pubdate", "published", "updated", "date")
+        description = _child_text(entry, "encoded", "description", "summary", "content")
+        location = _child_text(entry, "location", "region", "country", "jobgeo")
+        tags = [element.attrib.get("term", "") or (element.text or "").strip()
+                for element in entry.iter() if _local_name(element) == "category"]
+        jobs.append(Job(
+            source=source, id=identifier, title=clean_title, company=company, url=url,
+            published=from_feed_date(published), location=to_text(location),
+            description=to_text(description), tags=[tag for tag in tags if tag],
+        ))
+    return jobs
+
+
+def src_remotefirstjobs(cfg: dict, ua: str) -> list[Job]:
+    url = "https://remotefirstjobs.com/rss/jobs/devops.rss"
+    payload = fetch(url, ua, "application/rss+xml, application/atom+xml")
+    return parse_rss_atom(payload, "remotefirstjobs")
+
+
+def src_workanywhere(cfg: dict, ua: str) -> list[Job]:
+    url = "https://workanywhere.pro/rss/engineer.xml"
+    payload = fetch(url, ua, "application/rss+xml, application/atom+xml")
+    return parse_rss_atom(payload, "workanywhere")
+
+
+def src_remotive(cfg: dict, ua: str) -> list[Job]:
+    url = "https://remotive.com/remote-jobs/feed/devops"
+    payload = fetch(url, ua, "application/rss+xml, application/atom+xml")
+    return parse_rss_atom(payload, "remotive")
+
+
+def src_jobicy(cfg: dict, ua: str) -> list[Job]:
+    url = "https://jobicy.com/api/v2/remote-jobs?count=200&geo=usa&industry=engineering"
+    data = json.loads(fetch(url, ua))
+    if not isinstance(data, dict) or not isinstance(data.get("jobs", []), list):
+        raise ValueError("Jobicy API response missing jobs list")
+    jobs = []
+    for item in data.get("jobs", []):
+        if not isinstance(item, dict):
+            continue
+        title = item.get("jobTitle") or item.get("title") or ""
+        listing_url = item.get("url") or item.get("jobUrl") or ""
+        if not title or not listing_url:
+            continue
+        salary_min = item.get("annualSalaryMin", item.get("salaryMin", item.get("salary_min")))
+        salary_max = item.get("annualSalaryMax", item.get("salaryMax", item.get("salary_max")))
+        if not salary_min and not salary_max:
+            amounts = re.findall(r"\d[\d,]*(?:\.\d+)?", str(item.get("salary", "")))
+            if amounts:
+                salary_min = amounts[0]
+                salary_max = amounts[1] if len(amounts) > 1 else amounts[0]
+        tags = item.get("jobIndustry") or item.get("industry") or []
+        if isinstance(tags, str):
+            tags = [tags]
+        published = item.get("pubDate") or item.get("publication_date") or item.get("published") or ""
+        jobs.append(Job(
+            source="jobicy", id=str(item.get("id") or item.get("guid") or listing_url),
+            title=to_text(title), company=to_text(item.get("companyName") or item.get("company_name") or item.get("company") or ""),
+            url=listing_url, published=from_feed_date(published),
+            location=to_text(item.get("jobGeo") or item.get("job_geo") or item.get("geo") or item.get("location") or ""),
+            salary_min=as_int(salary_min), salary_max=as_int(salary_max),
+            description=to_text(item.get("jobDescription") or item.get("job_description") or item.get("jobExcerpt") or item.get("description") or ""),
+            tags=[to_text(str(tag)) for tag in tags],
+        ))
+    return jobs
 
 
 # --------------------------------------------------------------------------- sources
@@ -162,6 +307,16 @@ def src_himalayas(cfg: dict, ua: str) -> list[Job]:
     return jobs
 
 
+def src_himalayas_rss(cfg: dict, ua: str) -> list[Job]:
+    url = "https://himalayas.app/jobs/rss"
+    payload = fetch(url, ua, "application/rss+xml, application/atom+xml")
+    jobs = parse_rss_atom(payload, "himalayas_rss")
+    for job in jobs:
+        if not job.location:
+            job.location = "Worldwide"
+    return jobs
+
+
 def src_hn_whos_hiring(cfg: dict, ua: str) -> list[Job]:
     q = "https://hn.algolia.com/api/v1/search_by_date?tags=story,author_whoishiring&hitsPerPage=10"
     hits = json.loads(fetch(q, ua)).get("hits", [])
@@ -188,7 +343,12 @@ SOURCES = {
     "weworkremotely": src_weworkremotely,
     "remoteok": src_remoteok,
     "himalayas": src_himalayas,
+    "himalayas_rss": src_himalayas_rss,
     "hn_whos_hiring": src_hn_whos_hiring,
+    "remotefirstjobs": src_remotefirstjobs,
+    "workanywhere": src_workanywhere,
+    "jobicy": src_jobicy,
+    "remotive": src_remotive,
 }
 
 
@@ -228,6 +388,8 @@ class Rules:
             if m:
                 return f"reject:{m.group(0)[:40]}"
         us = bool(self.us_loc.search(loc) or self.us_body.search(body))
+        if not us and ("americas" in loc.lower() or "north america" in loc.lower()):
+            return "location-unclear"
         if self.non_us.search(loc) and not us:
             return "non-us-location"
         if not us and not self.anywhere.search(loc):
@@ -265,7 +427,15 @@ def item_html(j: Job) -> str:
     meta = " · ".join(x for x in (html.escape(j.company), html.escape(j.location), j.salary_str, j.source) if x)
     why = ", ".join(html.escape(r) for r in j.reasons) or "—"
     excerpt = html.escape(j.description[:700]).replace("\n", "<br>")
-    return f"<p><b>{meta}</b></p><p>Score {j.score} — {why}</p><p>{excerpt}…</p>"
+    source_url = {
+        "remotefirstjobs": "https://remotefirstjobs.com/rss",
+        "jobicy": "https://jobicy.com/jobs-rss-feed",
+        "himalayas": "https://himalayas.app/rss",
+        "workanywhere": "https://workanywhere.pro/rss",
+        "remotive": "https://remotive.com/remote-jobs/rss-feed",
+    }.get(j.source)
+    attribution = f' · <a href="{source_url}">Source: {html.escape(j.source)}</a>' if source_url else ""
+    return f"<p><b>{meta}{attribution}</b></p><p>Score {j.score} — {why}</p><p>{excerpt}…</p>"
 
 
 def write_rss(jobs: list[Job], feed: dict, path: Path) -> None:

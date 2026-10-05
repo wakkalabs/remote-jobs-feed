@@ -26,6 +26,22 @@ enabled = true
 enabled = true
 pages = 25          # 20 jobs per page, newest first
 
+[sources.himalayas_rss]
+enabled = true
+[sources.remotefirstjobs]
+enabled = true
+
+[sources.workanywhere]
+# Disabled until endpoint access (observed HTTP 429) and redistribution terms are clear.
+enabled = false
+
+[sources.jobicy]
+enabled = true
+
+[sources.remotive]
+# Disabled until listings appear and public aggregation is confirmed as permitted.
+enabled = false
+
 [sources.hn_whos_hiring]
 enabled = true
 
@@ -50,7 +66,7 @@ reject_phrases = [
 ]
 
 # Location text (region/country/HQ fields) signals.
-us_ok_location = '(united states|\busa\b|\bu\.s\.|\bus\b|americas|north america)'
+us_ok_location = '(united states|\busa\b|\bu\.s\.|\bus\b)'
 # Stricter US check used against the description body.
 us_ok_body = '(remote[\s,(\-–]*(us|usa|united states)\b|within the (us|united states)|us[- ]based|anywhere in the (us|united states))'
 non_us_location = '\b(canada|ontario|toronto|vancouver|uk|united kingdom|london|europe|emea|\beu\b|germany|france|spain|portugal|netherlands|poland|ireland|india|apac|asia|australia|sydney|new zealand|latam|latin america|brazil|mexico|argentina|colombia|philippines|barbados|israel|singapore|japan|africa)\b'
