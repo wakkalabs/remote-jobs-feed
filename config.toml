@@ -1,0 +1,75 @@
+# remote-jobs-feed configuration
+# Regexes are Python syntax, matched case-insensitively. Use TOML literal strings ('...').
+
+[feed]
+title = "Remote Platform Roles"
+description = "Fully remote, US-eligible senior platform / infrastructure roles"
+# GitHub Pages URL for the public feed.
+link = "https://wakkalabs.github.io/remote-jobs-feed/"
+max_items = 150
+max_age_days = 21
+# Identify yourself to the source APIs (Remote OK requires a UA).
+user_agent = "remote-jobs-feed/1.0 (personal job feed; contact via GitHub)"
+
+[sources.weworkremotely]
+enabled = true
+categories = [
+  "remote-devops-sysadmin-jobs",
+  "remote-back-end-programming-jobs",
+  "remote-full-stack-programming-jobs",
+]
+
+[sources.remoteok]
+enabled = true
+
+[sources.himalayas]
+enabled = true
+pages = 25          # 20 jobs per page, newest first
+
+[sources.hn_whos_hiring]
+enabled = true
+
+[filters]
+# Title must match this...
+title_include = '(platform|infrastructure|\binfra\b|devops|\bsre\b|site reliability|reliability eng|kubernetes|cloud (engineer|architect|infrastructure|platform)|developer (experience|productivity)|\bdevex\b|production eng)'
+# ...and must not match this.
+title_exclude = '(\bmanager\b|director|\bvp\b|head of|sales|account|advocate|analyst|intern\b|junior|\bjr\b|recruit|support engineer|solutions? (architect|engineer)|data scien|frontend|front-end)'
+
+require_seniority = true
+seniority = '(senior|\bsr\.?\b|staff|principal|\blead\b|architect|distinguished|\biii\b|\biv\b)'
+
+# Anywhere in location or description => reject.
+reject_phrases = [
+  '\bhybrid\b(?!\s+or\s+(fully\s+)?remote)',
+  '\b(in-office|on-?site required|on-?site requirement|onsite only)\b',
+  '\b(\d|one|two|three|four)\s+days\s+(per|a|each)\s+week\s+(in|at)\s+(the|our)?\s*office',
+  '(must|required to)\s+(reside|live|relocate)\s+(in|within|near|to)\s+(?!the (us|united states))',
+  '(willing to relocate|relocation (is )?required)',
+  '(security clearance|ts/sci|top secret|secret clearance|active clearance|clearance required)',
+  '(within commuting distance|commutable distance)\s+(is )?required',
+]
+
+# Location text (region/country/HQ fields) signals.
+us_ok_location = '(united states|\busa\b|\bu\.s\.|\bus\b|americas|north america)'
+# Stricter US check used against the description body.
+us_ok_body = '(remote[\s,(\-–]*(us|usa|united states)\b|within the (us|united states)|us[- ]based|anywhere in the (us|united states))'
+non_us_location = '\b(canada|ontario|toronto|vancouver|uk|united kingdom|london|europe|emea|\beu\b|germany|france|spain|portugal|netherlands|poland|ireland|india|apac|asia|australia|sydney|new zealand|latam|latin america|brazil|mexico|argentina|colombia|philippines|barbados|israel|singapore|japan|africa)\b'
+anywhere_location = '(worldwide|anywhere|global|^\s*remote\s*$|\|\s*remote\s*$)'
+
+# Drop roles whose posted max salary (USD, annual) is below this. Unknown salary is kept.
+min_salary_usd = 170000
+
+[scoring]
+# Each match in title+description adds `keyword_points`.
+keyword_points = 2
+keywords = [
+  'kubernetes', '\beks\b', '\baws\b', 'terraform', 'gitops', 'argo ?cd', '\bflux\b',
+  'argo rollouts', 'progressive delivery', 'platform engineering', 'developer experience',
+  'internal developer platform', '\bidp\b', 'backstage', 'port\.io', 'multi-account',
+  'transit gateway', 'crossplane', 'golang', 'hipaa', 'healthcare', 'soc ?2', 'self-service',
+]
+title_bonus = '(staff|principal|architect)'
+title_bonus_points = 3
+salary_target_usd = 180000
+salary_target_points = 2
+min_score = 0

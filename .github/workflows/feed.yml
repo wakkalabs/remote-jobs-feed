@@ -1,0 +1,42 @@
+name: Build job feed
+
+on:
+  schedule:
+    - cron: "17 */4 * * *"   # every 4 hours, off the top of the hour
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ["build_feed.py", "config.toml", ".github/workflows/feed.yml"]
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build feed
+        run: python build_feed.py --out public
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
